@@ -4,10 +4,44 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"runtime"
 	"strings"
+	"golang.org/x/net/proxy"
 )
+
+func getCurrentIP(url string) (string, error) {
+	client := &http.Client{}
+	
+	if configuration.Socks5Proxy != "" {
+	
+		log.Println("use socks5 proxy:" + configuration.Socks5Proxy)
+	
+		dialer, err := proxy.SOCKS5("tcp", configuration.Socks5Proxy, nil, proxy.Direct)
+		if err != nil {
+			fmt.Println("can't connect to the proxy:", err)
+			return "", err
+		}
+	
+		httpTransport := &http.Transport{}
+		client.Transport = httpTransport
+		httpTransport.Dial = dialer.Dial
+	}
+
+	response, err := client.Get(url)
+
+	if err != nil {
+		log.Println("Cannot get IP...")
+		return "", err
+	}
+
+	defer response.Body.Close()
+
+	body, _ := ioutil.ReadAll(response.Body)
+	return string(body), nil
+}
 
 func identifyPanic() string {
 	var name, file string
@@ -43,8 +77,16 @@ func usage() {
 }
 
 func checkSettings(config *Settings) error {
-	if (config.Email == "" || config.Password == "") && config.LoginToken == "" {
-		return errors.New("Input email/password or login token cannot be empty!")
+	if config.Provider == DNSPOD {
+		if (config.Email == "" || config.Password == "") && config.LoginToken == "" {
+			return errors.New("Email/Password or login token cannot be empty!")
+		}
+	} else if config.Provider == HE {
+		if config.Password == "" {
+			return errors.New("Password cannot be empty!")
+		}
+	} else {
+		return errors.New("Please provide supported DNS provider: DNSPod/HE")
 	}
 
 	return nil

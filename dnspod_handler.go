@@ -7,16 +7,22 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
+
 	"golang.org/x/net/proxy"
-	"github.com/bitly/go-simplejson"
+
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+
+	"github.com/bitly/go-simplejson"
 )
 
-var chain=`-----BEGIN CERTIFICATE-----
+var chain = `-----BEGIN CERTIFICATE-----
 MIIIPzCCByegAwIBAgIQEnH9KIzQjspNOOh1aFgB3zANBgkqhkiG9w0BAQsFADBH
 MQswCQYDVQQGEwJVUzEWMBQGA1UEChMNR2VvVHJ1c3QgSW5jLjEgMB4GA1UEAxMX
 R2VvVHJ1c3QgRVYgU1NMIENBIC0gRzQwHhcNMTYwNTEyMDAwMDAwWhcNMTgwNzEw
@@ -106,21 +112,64 @@ func decodePem(certInput string) tls.Certificate {
 	return cert
 }
 
-func getCurrentIP(url string) (string, error) {
-	response, err := http.Get(url)
+type DNSPodHandler struct{}
 
-	if err != nil {
-		log.Println("Cannot get IP...")
-		return "", err
+func (handler *DNSPodHandler) DomainLoop(domain *Domain) {
+	defer func() {
+		if err := recover(); err != nil {
+			panicCount++
+			log.Printf("Recovered in %v: %v\n", err, debug.Stack())
+			fmt.Println(identifyPanic())
+			log.Print(identifyPanic())
+			if panicCount < PANIC_MAX {
+				log.Println("Got panic in goroutine, will start a new one... :", panicCount)
+				go handler.DomainLoop(domain)
+			} else {
+				os.Exit(1)
+			}
+		}
+	}()
+
+	for {
+
+		domainID := handler.GetDomain(domain.DomainName)
+
+		if domainID == -1 {
+			continue
+		}
+
+		currentIP, err := getCurrentIP(configuration.IPUrl)
+
+		if err != nil {
+			log.Println("get_currentIP:", err)
+			continue
+		}
+		log.Println("currentIp is:", currentIP)
+
+		for _, subDomain := range domain.SubDomains {
+
+			subDomainID, ip := handler.GetSubDomain(domainID, subDomain)
+
+			if subDomainID == "" || ip == "" {
+				log.Printf("domain: %s.%s subDomainID: %s ip: %s\n", subDomain, domain.DomainName, subDomainID, ip)
+				continue
+			}
+
+			//Continue to check the IP of sub-domain
+			if len(ip) > 0 && !strings.Contains(currentIP, ip) {
+				log.Printf("%s.%s Start to update record IP...\n", subDomain, domain.DomainName)
+				handler.UpdateIP(domainID, subDomainID, subDomain, currentIP)
+			} else {
+				log.Printf("%s.%s Current IP is same as domain IP, no need to update...\n", subDomain, domain.DomainName)
+			}
+		}
+
+		//Interval is 5 minutes
+		time.Sleep(time.Minute * INTERVAL)
 	}
-
-	defer response.Body.Close()
-
-	body, _ := ioutil.ReadAll(response.Body)
-	return string(body), nil
 }
 
-func generateHeader(content url.Values) url.Values {
+func (handler *DNSPodHandler) GenerateHeader(content url.Values) url.Values {
 	header := url.Values{}
 	if configuration.LoginToken != "" {
 		header.Add("login_token", configuration.LoginToken)
@@ -133,7 +182,7 @@ func generateHeader(content url.Values) url.Values {
 	header.Add("error_on_empty", "no")
 
 	if content != nil {
-		for k, _ := range content {
+		for k := range content {
 			header.Add(k, content.Get(k))
 		}
 	}
@@ -141,11 +190,7 @@ func generateHeader(content url.Values) url.Values {
 	return header
 }
 
-func apiVersion() {
-	postData("/Info.Version", nil)
-}
-
-func getDomain(name string) int64 {
+func (handler *DNSPodHandler) GetDomain(name string) int64 {
 
 	var ret int64
 	values := url.Values{}
@@ -153,7 +198,7 @@ func getDomain(name string) int64 {
 	values.Add("offset", "0")
 	values.Add("length", "20")
 
-	response, err := postData("/Domain.List", values)
+	response, err := handler.PostData("/Domain.List", values)
 
 	if err != nil {
 		log.Println("Failed to get domain list...")
@@ -193,7 +238,7 @@ func getDomain(name string) int64 {
 	return ret
 }
 
-func getSubDomain(domainID int64, name string) (string, string) {
+func (handler *DNSPodHandler) GetSubDomain(domainID int64, name string) (string, string) {
 	log.Println("debug:", domainID, name)
 	var ret, ip string
 	value := url.Values{}
@@ -202,7 +247,7 @@ func getSubDomain(domainID int64, name string) (string, string) {
 	value.Add("length", "1")
 	value.Add("sub_domain", name)
 
-	response, err := postData("/Record.List", value)
+	response, err := handler.PostData("/Record.List", value)
 
 	if err != nil {
 		log.Println("Failed to get domain list")
@@ -237,7 +282,7 @@ func getSubDomain(domainID int64, name string) (string, string) {
 	return ret, ip
 }
 
-func updateIP(domainID int64, subDomainID string, subDomainName string, ip string) {
+func (handler *DNSPodHandler) UpdateIP(domainID int64, subDomainID string, subDomainName string, ip string) {
 	value := url.Values{}
 	value.Add("domain_id", strconv.FormatInt(domainID, 10))
 	value.Add("record_id", subDomainID)
@@ -246,7 +291,7 @@ func updateIP(domainID int64, subDomainID string, subDomainName string, ip strin
 	value.Add("record_line", "默认")
 	value.Add("value", ip)
 
-	response, err := postData("/Record.Modify", value)
+	response, err := handler.PostData("/Record.Modify", value)
 
 	if err != nil {
 		log.Println("Failed to update record to new IP!")
@@ -267,9 +312,9 @@ func updateIP(domainID int64, subDomainID string, subDomainName string, ip strin
 
 }
 
-func postData(url string, content url.Values) (string, error) {
+func (handler *DNSPodHandler) PostData(url string, content url.Values) (string, error) {
 	certChain := decodePem(chain)
-	conf := tls.Config { }
+	conf := tls.Config{}
 	conf.RootCAs = x509.NewCertPool()
 	for _, cert := range certChain.Certificate {
 		x509Cert, err := x509.ParseCertificate(cert)
@@ -280,7 +325,7 @@ func postData(url string, content url.Values) (string, error) {
 	}
 	conf.BuildNameToCertificate()
 
-	tr := http.Transport{ TLSClientConfig: &conf }
+	tr := http.Transport{TLSClientConfig: &conf}
 	client := &http.Client{Transport: &tr}
 
 	if configuration.Socks5Proxy != "" {
@@ -298,8 +343,8 @@ func postData(url string, content url.Values) (string, error) {
 		httpTransport.Dial = dialer.Dial
 	}
 
-	values := generateHeader(content)
-	req, _ := http.NewRequest("POST", "https://dnsapi.cn" + url, strings.NewReader(values.Encode()))
+	values := handler.GenerateHeader(content)
+	req, _ := http.NewRequest("POST", "https://dnsapi.cn"+url, strings.NewReader(values.Encode()))
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", fmt.Sprintf("GoDNS/0.1 (%s)", configuration.Email))
