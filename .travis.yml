@@ -1,11 +1,12 @@
 language: go
 go: 
- - 1.7
- - 1.8
- - 1.9
+ - 1.7.x
+ - 1.8.x
+ - 1.9.x
 
 install:
   go get -v
+  go get -v github.com/bitly/go-simplejson
 
 script:
  - cp ./config_sample.json ./config.json

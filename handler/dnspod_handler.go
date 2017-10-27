@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"encoding/json"
@@ -7,19 +7,18 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/TimothyYe/godns"
+	"github.com/bitly/go-simplejson"
 	"golang.org/x/net/proxy"
 
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
-
-	"github.com/bitly/go-simplejson"
 )
 
 var chain = `-----BEGIN CERTIFICATE-----
@@ -112,21 +111,23 @@ func decodePem(certInput string) tls.Certificate {
 	return cert
 }
 
-type DNSPodHandler struct{}
+// DNSPodHandler struct definition
+type DNSPodHandler struct {
+	Configuration *godns.Settings
+}
 
-func (handler *DNSPodHandler) DomainLoop(domain *Domain) {
+func (handler *DNSPodHandler) SetConfiguration(conf *godns.Settings) {
+	handler.Configuration = conf
+}
+
+// DomainLoop the main logic loop
+func (handler *DNSPodHandler) DomainLoop(domain *godns.Domain, panicChan chan<- godns.Domain) {
 	defer func() {
 		if err := recover(); err != nil {
-			panicCount++
 			log.Printf("Recovered in %v: %v\n", err, debug.Stack())
-			fmt.Println(identifyPanic())
-			log.Print(identifyPanic())
-			if panicCount < PANIC_MAX {
-				log.Println("Got panic in goroutine, will start a new one... :", panicCount)
-				go handler.DomainLoop(domain)
-			} else {
-				os.Exit(1)
-			}
+			fmt.Println(godns.IdentifyPanic())
+			log.Print(godns.IdentifyPanic())
+			panicChan <- *domain
 		}
 	}()
 
@@ -138,7 +139,7 @@ func (handler *DNSPodHandler) DomainLoop(domain *Domain) {
 			continue
 		}
 
-		currentIP, err := getCurrentIP(configuration.IPUrl)
+		currentIP, err := godns.GetCurrentIP(handler.Configuration)
 
 		if err != nil {
 			log.Println("get_currentIP:", err)
@@ -165,17 +166,18 @@ func (handler *DNSPodHandler) DomainLoop(domain *Domain) {
 		}
 
 		//Interval is 5 minutes
-		time.Sleep(time.Minute * INTERVAL)
+		time.Sleep(time.Minute * godns.INTERVAL)
 	}
 }
 
+// GenerateHeader generates the request header for DNSPod API
 func (handler *DNSPodHandler) GenerateHeader(content url.Values) url.Values {
 	header := url.Values{}
-	if configuration.LoginToken != "" {
-		header.Add("login_token", configuration.LoginToken)
+	if handler.Configuration.LoginToken != "" {
+		header.Add("login_token", handler.Configuration.LoginToken)
 	} else {
-		header.Add("login_email", configuration.Email)
-		header.Add("login_password", configuration.Password)
+		header.Add("login_email", handler.Configuration.Email)
+		header.Add("login_password", handler.Configuration.Password)
 	}
 	header.Add("format", "json")
 	header.Add("lang", "en")
@@ -190,6 +192,7 @@ func (handler *DNSPodHandler) GenerateHeader(content url.Values) url.Values {
 	return header
 }
 
+// GetDomain returns specific domain by name
 func (handler *DNSPodHandler) GetDomain(name string) int64 {
 
 	var ret int64
@@ -238,6 +241,7 @@ func (handler *DNSPodHandler) GetDomain(name string) int64 {
 	return ret
 }
 
+// GetSubDomain returns subdomain by domain id
 func (handler *DNSPodHandler) GetSubDomain(domainID int64, name string) (string, string) {
 	log.Println("debug:", domainID, name)
 	var ret, ip string
@@ -282,6 +286,7 @@ func (handler *DNSPodHandler) GetSubDomain(domainID int64, name string) (string,
 	return ret, ip
 }
 
+// UpdateIP update subdomain with current IP
 func (handler *DNSPodHandler) UpdateIP(domainID int64, subDomainID string, subDomainName string, ip string) {
 	value := url.Values{}
 	value.Add("domain_id", strconv.FormatInt(domainID, 10))
@@ -312,6 +317,7 @@ func (handler *DNSPodHandler) UpdateIP(domainID int64, subDomainID string, subDo
 
 }
 
+// PostData post data and invoke DNSPod API
 func (handler *DNSPodHandler) PostData(url string, content url.Values) (string, error) {
 	certChain := decodePem(chain)
 	conf := tls.Config{}
@@ -328,11 +334,11 @@ func (handler *DNSPodHandler) PostData(url string, content url.Values) (string, 
 	tr := http.Transport{TLSClientConfig: &conf}
 	client := &http.Client{Transport: &tr}
 
-	if configuration.Socks5Proxy != "" {
+	if handler.Configuration.Socks5Proxy != "" {
 
-		log.Println("use socks5 proxy:" + configuration.Socks5Proxy)
+		log.Println("use socks5 proxy:" + handler.Configuration.Socks5Proxy)
 
-		dialer, err := proxy.SOCKS5("tcp", configuration.Socks5Proxy, nil, proxy.Direct)
+		dialer, err := proxy.SOCKS5("tcp", handler.Configuration.Socks5Proxy, nil, proxy.Direct)
 		if err != nil {
 			fmt.Println("can't connect to the proxy:", err)
 			return "", err
@@ -347,7 +353,7 @@ func (handler *DNSPodHandler) PostData(url string, content url.Values) (string, 
 	req, _ := http.NewRequest("POST", "https://dnsapi.cn"+url, strings.NewReader(values.Encode()))
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", fmt.Sprintf("GoDNS/0.1 (%s)", configuration.Email))
+	req.Header.Set("User-Agent", fmt.Sprintf("GoDNS/0.1 (%s)", handler.Configuration.Email))
 
 	response, err := client.Do(req)
 
