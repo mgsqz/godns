@@ -2,13 +2,9 @@ package godns
 
 import (
 	"errors"
-	"flag"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
-	"runtime"
-	"strings"
 
 	"golang.org/x/net/proxy"
 )
@@ -24,16 +20,16 @@ const (
 	HE = "HE"
 )
 
+// GetCurrentIP gets public IP from internet
 func GetCurrentIP(configuration *Settings) (string, error) {
 	client := &http.Client{}
 
 	if configuration.Socks5Proxy != "" {
 
 		log.Println("use socks5 proxy:" + configuration.Socks5Proxy)
-
 		dialer, err := proxy.SOCKS5("tcp", configuration.Socks5Proxy, nil, proxy.Direct)
 		if err != nil {
-			fmt.Println("can't connect to the proxy:", err)
+			log.Println("can't connect to the proxy:", err)
 			return "", err
 		}
 
@@ -55,39 +51,7 @@ func GetCurrentIP(configuration *Settings) (string, error) {
 	return string(body), nil
 }
 
-func IdentifyPanic() string {
-	var name, file string
-	var line int
-	var pc [16]uintptr
-
-	n := runtime.Callers(3, pc[:])
-	for _, pc := range pc[:n] {
-		fn := runtime.FuncForPC(pc)
-		if fn == nil {
-			continue
-		}
-		file, line = fn.FileLine(pc)
-		name = fn.Name()
-		if !strings.HasPrefix(name, "runtime.") {
-			break
-		}
-	}
-
-	switch {
-	case name != "":
-		return fmt.Sprintf("%v:%v", name, line)
-	case file != "":
-		return fmt.Sprintf("%v:%v", file, line)
-	}
-
-	return fmt.Sprintf("pc:%x", pc)
-}
-
-func Usage() {
-	log.Println("[command] -c=[config file path]")
-	flag.PrintDefaults()
-}
-
+// CheckSettings check the format of settings
 func CheckSettings(config *Settings) error {
 	if config.Provider == DNSPOD {
 		if (config.Email == "" || config.Password == "") && config.LoginToken == "" {

@@ -116,6 +116,7 @@ type DNSPodHandler struct {
 	Configuration *godns.Settings
 }
 
+// SetConfiguration pass dns settings and store it to handler instance
 func (handler *DNSPodHandler) SetConfiguration(conf *godns.Settings) {
 	handler.Configuration = conf
 }
@@ -125,8 +126,6 @@ func (handler *DNSPodHandler) DomainLoop(domain *godns.Domain, panicChan chan<- 
 	defer func() {
 		if err := recover(); err != nil {
 			log.Printf("Recovered in %v: %v\n", err, debug.Stack())
-			fmt.Println(godns.IdentifyPanic())
-			log.Print(godns.IdentifyPanic())
 			panicChan <- *domain
 		}
 	}()
