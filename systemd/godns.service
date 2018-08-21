@@ -3,7 +3,7 @@ Description=GoDNS Service
 After=network.target
 
 [Service]
-ExecStart=/path/to/your/godns-dir/godns -c=/path/to/your/godns-dir/config.json
+ExecStart=/home/ddns/godns -c=/home/ddns/config.json
 Restart=always
 KillMode=process
 RestartSec=2s
